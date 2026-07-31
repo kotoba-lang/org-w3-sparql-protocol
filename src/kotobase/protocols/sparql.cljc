@@ -156,7 +156,7 @@
   caching between requests) -- the same linear-scan limitation
   `kotobase.query.bridge/materialize` itself documents; this handler adds
   no caching on top of it."
-  [{:keys [store coll-keys visible?]} req]
+  [{:keys [store coll-keys visible?] :as ctx} req]
   (cond
     (not (#{:get :post} (:method req)))
     (error-response 405 "method not allowed: GET and POST only")
@@ -177,7 +177,9 @@
         (let [parsed (try (parser/parse query-text) (catch #?(:clj Exception :cljs :default) e e))]
           (if (instance? #?(:clj Exception :cljs js/Error) parsed)
             (error-response 400 (str "SPARQL parse error: " #?(:clj (.getMessage ^Exception parsed) :cljs (.-message parsed))))
-            (let [db (bridge/materialize store coll-keys)
+            ;; db-for memoises when ctx carries a content address, and builds
+            ;; fresh when it does not (ADR-2607310900 L1).
+            (let [db (bridge/db-for ctx store coll-keys)
                   quad-seq (quads/datoms->quads db visible?)]
               (case (:form parsed)
                 :select (json-response 200 (results/select->json (:output-vars parsed)
