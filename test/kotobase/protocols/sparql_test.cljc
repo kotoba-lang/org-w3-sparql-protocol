@@ -1,6 +1,6 @@
 (ns kotobase.protocols.sparql-test
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
             [kotobase.local :as local]
             [kotobase.store :as st]
             [kotobase.protocols.sparql :as h]))
@@ -195,3 +195,45 @@
         resp (h/handle (ctx no-bob?) {:method :get :query {"query" "SELECT ?n WHERE { ?u <urn:kotobase:kotobase/coll> \"users\" . ?u <urn:kotobase:name> ?n }"}})
         names (into #{} (map #(get-in % ["n" "value"])) (get-in (decode (:body resp)) ["results" "bindings"]))]
     (is (= #{"Alice" "Carol" "Dave"} names))))
+
+;; --- CONSTRUCT / DESCRIBE over HTTP ----------------------------------------
+
+(defn- nt-req [q accept]
+  {:method :post :path "/sparql"
+   :headers (cond-> {"content-type" "application/sparql-query"}
+              accept (assoc "accept" accept))
+   :body q})
+
+(deftest construct-answers-n-triples
+  (let [r (h/handle (ctx) (nt-req "CONSTRUCT { ?u <urn:kotobase:isNamed> ?n } WHERE { ?u <urn:kotobase:name> ?n }"
+                                       "application/n-triples"))]
+    (is (= 200 (:status r)))
+    (is (re-find #"application/n-triples" (get (:headers r) "content-type")))
+    (is (re-find #"<urn:kotobase:isNamed>" (:body r)))
+    (is (every? #(re-find #" \.$" %) (remove str/blank? (str/split-lines (:body r))))
+        "every line is a terminated triple")))
+
+(deftest describe-answers-the-subject-triples
+  (let [r (h/handle (ctx) (nt-req "DESCRIBE ?u WHERE { ?u <urn:kotobase:role> \"admin\" }"
+                                       "application/n-triples"))]
+    (is (= 200 (:status r)))
+    (is (seq (:body r)))))
+
+(deftest a-graph-form-is-not-offered-as-a-results-table
+  (testing "content negotiation depends on the FORM, not just the header:
+            application/sparql-results+json has no way to say 'these are
+            triples', so asking for it with CONSTRUCT is a 406 rather than a
+            graph mislabelled as a solution table"
+    (let [r (h/handle (ctx) (nt-req "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }"
+                                         "application/sparql-results+json"))]
+      (is (= 406 (:status r)))
+      (is (re-find #"RDF graph" (:body r))))))
+
+(deftest a-solution-table-is-still-json-only
+  (let [r (h/handle (ctx) (nt-req "SELECT ?s WHERE { ?s ?p ?o }" "application/n-triples"))]
+    (is (= 406 (:status r)))))
+
+(deftest no-accept-header-gets-the-one-format-there-is
+  (doseq [q ["CONSTRUCT { ?s <urn:p> ?o } WHERE { ?s <urn:kotobase:name> ?o }"
+             "SELECT ?s WHERE { ?s ?p ?o }"]]
+    (is (= 200 (:status (h/handle (ctx) (nt-req q nil)))) q)))

@@ -19,7 +19,8 @@
   ## Supported query-text subset (v0.1 -- read before assuming more)
 
   - `PREFIX p: <iri>` declarations (any number, before the query body)
-  - `SELECT (DISTINCT)? (?var+ | *)` and `ASK`
+  - `SELECT (DISTINCT)? (?var+ | *)`, `ASK`, `CONSTRUCT { template } WHERE
+    { ... }`, `DESCRIBE <iri>+` and `DESCRIBE ?var+ WHERE { ... }`
   - `WHERE { ... }` (the `WHERE` keyword itself is optional, as in the spec)
   - inside a group: triple patterns (`s p o .`), `OPTIONAL { ... }`,
     `{ ... } UNION { ... }` (chainable), `FILTER(...)`
@@ -382,7 +383,7 @@
 ;; ----------------------------------------------------------------- top level
 
 (defn parse
-  "SPARQL query text -> `{:form :select|:ask
+  "SPARQL query text -> `{:form :select|:ask|:construct|:describe|:describe-solutions
                            :output-vars [sym...] or nil (SELECT * / ASK)
                            :algebra <full sparql.core algebra tree>
                            :warnings [string...]}`.
@@ -416,6 +417,43 @@
                    {:sparql/op :slice :offset (or offset 0) :limit limit :pattern base}
                    base)]
         {:form :select :output-vars output-vars :algebra base :warnings []})
+
+      (peek-kw? state "CONSTRUCT")
+      (let [_ (advance! state)
+            _ (expect-punct! state "{")
+            template (loop [ts []]
+                       (if (peek-punct? state "}")
+                         (do (advance! state) ts)
+                         (recur (conj ts (parse-triple! state prefixes)))))
+            _ (when (peek-kw? state "WHERE") (advance! state))
+            pattern (parse-group! state prefixes)
+            [limit offset] (parse-limit-offset! state)
+            base (if (or limit offset)
+                   {:sparql/op :slice :offset (or offset 0) :limit limit :pattern pattern}
+                   pattern)]
+        (when (empty? template)
+          (throw (ex-info "SPARQL parse error: CONSTRUCT template is empty -- there is nothing to build" {:type ::parse-error})))
+        {:form :construct :template template :output-vars nil :algebra base :warnings []})
+
+      (peek-kw? state "DESCRIBE")
+      (let [_ (advance! state)
+            ;; `DESCRIBE <iri>` names its subjects outright; `DESCRIBE ?v WHERE`
+            ;; resolves them from solutions. Both are in the spec and they need
+            ;; different evaluation, so the form records which one it is rather
+            ;; than leaving the handler to guess from whether :algebra is nil.
+            terms (loop [ts []]
+                    (if (or (nil? (peek1 state)) (peek-kw? state "WHERE") (peek-punct? state "{"))
+                      ts
+                      (recur (conj ts (parse-term! state prefixes)))))
+            _ (when (empty? terms)
+                (throw (ex-info "SPARQL parse error: DESCRIBE needs at least one IRI or variable" {:type ::parse-error})))
+            has-where? (or (peek-kw? state "WHERE") (peek-punct? state "{"))
+            _ (when (peek-kw? state "WHERE") (advance! state))
+            pattern (when has-where? (parse-group! state prefixes))]
+        (if pattern
+          {:form :describe-solutions :output-vars (filterv symbol? terms)
+           :algebra pattern :warnings []}
+          {:form :describe :terms terms :output-vars nil :algebra nil :warnings []}))
 
       (peek-kw? state "ASK")
       (let [_ (advance! state)
