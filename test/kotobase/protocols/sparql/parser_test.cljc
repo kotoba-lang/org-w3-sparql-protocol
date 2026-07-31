@@ -1,5 +1,5 @@
 (ns kotobase.protocols.sparql.parser-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [kotobase.protocols.sparql.parser :as parser]
             [kotobase.protocols.sparql.quads :as quads]))
 
@@ -67,9 +67,15 @@
     (is (= :order-by (:sparql/op (:pattern algebra))))
     (is (= '[?n] (:vars (:pattern algebra))))))
 
-(deftest order-by-desc-warns-but-still-parses
-  (let [parsed (parser/parse "SELECT ?n WHERE { ?u <urn:kotobase:name> ?n } ORDER BY DESC(?n)")]
-    (is (seq (:warnings parsed)))))
+(deftest order-by-desc-is-carried-not-warned-about
+  ;; This test used to assert a WARNING was produced, which pinned the bug as
+  ;; the contract: DESC parsed, emitted "sorts ascending", and the warning was
+  ;; then dropped by the HTTP handler so no client ever saw it. DESC now works,
+  ;; so there is nothing to warn about.
+  (let [parsed (parser/parse "SELECT ?n WHERE { ?u <urn:kotobase:name> ?n } ORDER BY DESC(?n)")
+        ob (loop [n (:algebra parsed)] (if (= :order-by (:sparql/op n)) n (recur (:pattern n))))]
+    (is (empty? (:warnings parsed)))
+    (is (= '#{?n} (:desc ob)))))
 
 (deftest ask-form
   (let [parsed (parser/parse "ASK WHERE { ?u <urn:kotobase:role> \"admin\" }")]
@@ -95,3 +101,34 @@
 (deftest unsupported-form-throws
   (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                (parser/parse "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }"))))
+
+;; --- ORDER BY DESC ---------------------------------------------------------
+
+(deftest desc-reaches-the-algebra
+  (testing "DESC was accepted and then discarded, leaving the algebra to sort
+            ascending — the parser now carries the direction through"
+    (let [{:keys [algebra]} (parser/parse "SELECT ?n WHERE { ?s <p> ?n } ORDER BY DESC(?n)")
+          ob (loop [n algebra] (if (= :order-by (:sparql/op n)) n (recur (:pattern n))))]
+      (is (= '[?n] (:vars ob)))
+      (is (= '#{?n} (:desc ob))))))
+
+(deftest asc-emits-no-desc-key
+  (testing "backward compatible: an all-ascending ORDER BY is the same node it
+            always was, with no :desc at all"
+    (doseq [q ["SELECT ?n WHERE { ?s <p> ?n } ORDER BY ?n"
+               "SELECT ?n WHERE { ?s <p> ?n } ORDER BY ASC(?n)"]]
+      (let [{:keys [algebra]} (parser/parse q)
+            ob (loop [n algebra] (if (= :order-by (:sparql/op n)) n (recur (:pattern n))))]
+        (is (= '[?n] (:vars ob)))
+        (is (not (contains? ob :desc)) q)))))
+
+(deftest mixed-directions-are-per-var
+  (let [{:keys [algebra]} (parser/parse "SELECT ?a ?b WHERE { ?a <p> ?b } ORDER BY ?a DESC(?b)")
+        ob (loop [n algebra] (if (= :order-by (:sparql/op n)) n (recur (:pattern n))))]
+    (is (= '[?a ?b] (:vars ob)))
+    (is (= '#{?b} (:desc ob)) "only the var DESC() wrapped")))
+
+(deftest no-warning-is-emitted-for-desc-anymore
+  (testing "the warning existed because the feature did not work; it was also
+            never surfaced to the client, which is what made it silent"
+    (is (empty? (:warnings (parser/parse "SELECT ?n WHERE { ?s <p> ?n } ORDER BY DESC(?n)"))))))

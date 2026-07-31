@@ -42,12 +42,11 @@
     BY`/...), blank-node syntax (`_:b0`/`[...]`), `VALUES`, subqueries** --
     identical boundary to `kotoba-lang/sparql`'s algebra, which has none of
     these operators to translate into.
-  - **`DESC` in `ORDER BY` is accepted syntactically but sorts ASCENDING**
-    -- `sparql.core`'s `:order-by` node (`sort-by (apply juxt vars)`) has
-    no direction flag; reversing would require post-processing this parser
-    deliberately does not add (a genuine, documented v0.1 gap, not a silent
-    mishandling -- `parse` includes a `:warnings` vector any time `DESC` is
-    used, so a caller can surface it instead of it disappearing silently).
+  - `ORDER BY` sorts unbound-first and compares across types by type name,
+    so a heterogeneous column orders rather than throwing (`sparql.core`'s
+    `row-comparator`). Within a type it is `compare`. This is a total order,
+    not SPARQL 1.1 §15.1's full ordering — no datatype-aware numeric/date
+    collation.
   - **`FILTER`'s `=`/`!=` compare terms' `:value` only** (see
     `kotobase.protocols.sparql.quads`'s ns docstring on why literal terms
     are `{:rdf/type ... :value ...}` two-key maps) -- an IRI and a literal
@@ -341,22 +340,22 @@
 (defn- parse-order-by! [state]
   (if (peek-kw? state "ORDER")
     (do (advance! state) (expect-kw! state "BY")
-        (loop [vars [] warnings []]
+        (loop [vars [] desc #{}]
           (cond
             (or (peek-kw? state "ASC") (peek-kw? state "DESC"))
             (let [desc? (peek-kw? state "DESC")]
               (advance! state)
               (expect-punct! state "(")
-              (let [v (advance! state)]
+              (let [v (advance! state)
+                    sym (symbol (str "?" (:name v)))]
                 (expect-punct! state ")")
-                (recur (conj vars (symbol (str "?" (:name v))))
-                       (cond-> warnings desc? (conj "ORDER BY DESC() sorts ascending -- see parser ns docstring")))))
+                (recur (conj vars sym) (cond-> desc desc? (conj sym)))))
 
             (= :var (:type (peek1 state)))
-            (recur (conj vars (symbol (str "?" (:name (advance! state))))) warnings)
+            (recur (conj vars (symbol (str "?" (:name (advance! state))))) desc)
 
-            :else [vars warnings])))
-    [[] []]))
+            :else [vars desc])))
+    [[] #{}]))
 
 (defn- parse-limit-offset! [state]
   (loop [limit nil offset nil]
@@ -394,15 +393,18 @@
             output-vars (parse-var-list! state)
             _ (when (peek-kw? state "WHERE") (advance! state))
             pattern (parse-group! state prefixes)
-            [order-vars order-warnings] (parse-order-by! state)
+            [order-vars order-desc] (parse-order-by! state)
             [limit offset] (parse-limit-offset! state)
-            base (if (seq order-vars) {:sparql/op :order-by :vars order-vars :pattern pattern} pattern)
+            base (if (seq order-vars)
+                   (cond-> {:sparql/op :order-by :vars order-vars :pattern pattern}
+                     (seq order-desc) (assoc :desc order-desc))
+                   pattern)
             base (if output-vars {:sparql/op :project :vars output-vars :pattern base} base)
             base (if distinct? {:sparql/op :distinct :pattern base} base)
             base (if (or limit offset)
                    {:sparql/op :slice :offset (or offset 0) :limit limit :pattern base}
                    base)]
-        {:form :select :output-vars output-vars :algebra base :warnings order-warnings})
+        {:form :select :output-vars output-vars :algebra base :warnings []})
 
       (peek-kw? state "ASK")
       (let [_ (advance! state)
