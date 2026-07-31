@@ -46,9 +46,27 @@
   collision-free across every materialized collection (mirrors
   `kotobase.query.bridge`'s own entity-id scheme: `(keyword coll k)`), so
   the same source keyword always round-trips to the same IRI term, which is
-  what BGP-pattern equality (`sparql.core/term=` is plain `=`) depends on."
+  what BGP-pattern equality (`sparql.core/term=` is plain `=`) depends on.
+
+  Total over what a datom attribute can actually be, not just over what it
+  should be. `kotobase.query.bridge` now normalises document keys to keywords,
+  which is the real fix for the case that found this — but before it did, a
+  JSON-authored document put a STRING here, ClojureScript's `namespace` threw
+  `Doesn't support namespace: <x>`, and every SPARQL query against that graph
+  failed with an internal error whatever the query said (production,
+  2026-07-31). A query surface should degrade to a usable IRI rather than 500
+  when it meets an identifier shape it did not expect, so a non-`INamed`
+  attribute is stringified rather than thrown on.
+
+  A string `\"v2\"` and the keyword `:v2` therefore produce the SAME IRI. That
+  is a deliberate conflation of two things the store can distinguish, and it is
+  the right trade here only because the bridge no longer emits the string form;
+  if it ever does again, the two collapse instead of erroring, and this comment
+  is the warning."
   [kw]
-  (str "urn:kotobase:" (if-let [ns (namespace kw)] (str ns "/" (name kw)) (name kw))))
+  (if (or (keyword? kw) (symbol? kw))
+    (str "urn:kotobase:" (if-let [ns (namespace kw)] (str ns "/" (name kw)) (name kw)))
+    (str "urn:kotobase:" kw)))
 
 (defn iri-string->kw
   "Inverse of `kw->iri-string`, for callers that need to go back from a
