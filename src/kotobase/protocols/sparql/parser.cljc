@@ -24,7 +24,8 @@
   - inside a group: triple patterns (`s p o .`), `OPTIONAL { ... }`,
     `{ ... } UNION { ... }` (chainable), `FILTER(...)`
   - `FILTER` expressions: `=` `!=` `<` `>` `<=` `>=` between a var/IRI/
-    literal operand pair, `&&` conjunction, unary `!` negation, `BOUND(?v)`
+    literal operand pair, `&&` conjunction, `||` disjunction (looser than
+    `&&`, per the SPARQL 1.1 grammar), unary `!` negation, `BOUND(?v)`
   - `ORDER BY ?var+` (ascending only -- see limitation below)
   - `LIMIT n`, `OFFSET n` (either order, both optional)
 
@@ -32,9 +33,9 @@
   carve-outs -- this parser does not attempt to cover ground that repo's
   algebra itself does not have)
 
-  - **No `||` (logical OR) inside `FILTER`** -- `&&`/`!`/comparisons/
-    `BOUND` only. `UNION` (pattern-level, not expression-level) is how
-    this subset expresses \"either of two shapes\".
+  - `UNION` remains the PATTERN-level disjunction and is not the same thing
+    as `||`: `||` combines truth values over one solution, `UNION` combines
+    solutions. Both are supported and neither substitutes for the other.
   - **No predicate-object lists** (`s p o1 , o2`) or **property lists**
     (`s p1 o1 ; p2 o2`) -- one `s p o .` triple per statement. Write out
     each triple pattern separately.
@@ -230,12 +231,22 @@
   (cond
     (peek-punct? state "(")
     (do (advance! state)
-        (let [e (parse-unary-expr! state prefixes)]
-          (loop [left e]
-            (if (peek-op? state "&&")
+        ;; `||` binds LOOSER than `&&` (SPARQL 1.1 grammar: ConditionalOrExpression
+        ;; over ConditionalAndExpression), so the and-chain is the inner loop.
+        ;; Parsing them at one level would make `a || b && c` mean `(a || b) && c`,
+        ;; which is a wrong answer rather than a rejected query.
+        (letfn [(and-chain []
+                  (loop [left (parse-unary-expr! state prefixes)]
+                    (if (peek-op? state "&&")
+                      (do (advance! state)
+                          (let [right (parse-unary-expr! state prefixes)]
+                            (recur (fn [b] (and (left b) (right b))))))
+                      left)))]
+          (loop [left (and-chain)]
+            (if (peek-op? state "||")
               (do (advance! state)
-                  (let [right (parse-unary-expr! state prefixes)]
-                    (recur (fn [b] (and (left b) (right b))))))
+                  (let [right (and-chain)]
+                    (recur (fn [b] (or (left b) (right b))))))
               (do (expect-punct! state ")") left)))))
 
     (kw-tok? (peek1 state) "BOUND")

@@ -132,3 +132,37 @@
   (testing "the warning existed because the feature did not work; it was also
             never surfaced to the client, which is what made it silent"
     (is (empty? (:warnings (parser/parse "SELECT ?n WHERE { ?s <p> ?n } ORDER BY DESC(?n)"))))))
+
+;; --- FILTER || -------------------------------------------------------------
+
+(defn- pred-of [algebra]
+  (loop [n algebra] (if (= :filter (:sparql/op n)) (:pred n) (recur (:pattern n)))))
+
+(defn- lit [v] (quads/->literal v))
+
+(deftest filter-or-is-a-disjunction
+  (let [pr (pred-of (p "SELECT ?s WHERE { ?s <urn:x> ?o . FILTER(?o = 1 || ?o = 2) }"))]
+    (is (true? (pr {'?o (lit 1)})))
+    (is (true? (pr {'?o (lit 2)})))
+    (is (false? (pr {'?o (lit 3)})))))
+
+(deftest or-binds-looser-than-and
+  (testing "SPARQL 1.1 puts ConditionalOr over ConditionalAnd, so
+            `a || b && c` is `a || (b && c)`. Parsing both at one level would
+            make it `(a || b) && c` — a wrong answer, not a rejected query"
+    (let [pr (pred-of (p "SELECT ?s WHERE { ?s <urn:x> ?o . FILTER(?a = 1 || ?b = 2 && ?c = 3) }"))]
+      (is (true? (pr {'?a (lit 1) '?b (lit 0) '?c (lit 0)})) "left alternative alone suffices")
+      (is (true? (pr {'?a (lit 0) '?b (lit 2) '?c (lit 3)})) "both halves of the and-chain")
+      (is (false? (pr {'?a (lit 0) '?b (lit 2) '?c (lit 0)})) "half the and-chain is not enough")
+      (is (false? (pr {'?a (lit 0) '?b (lit 0) '?c (lit 3)}))))))
+
+(deftest or-composes-with-negation-and-bound
+  (let [pr (pred-of (p "SELECT ?s WHERE { ?s <urn:x> ?o . FILTER(!(?o = 1) || BOUND(?z)) }"))]
+    (is (true? (pr {'?o (lit 2)})))
+    (is (false? (pr {'?o (lit 1)})))
+    (is (true? (pr {'?o (lit 1) '?z (lit "x")})) "BOUND rescues it")))
+
+(deftest and-alone-still-behaves
+  (let [pr (pred-of (p "SELECT ?s WHERE { ?s <urn:x> ?o . FILTER(?a = 1 && ?b = 2) }"))]
+    (is (true? (pr {'?a (lit 1) '?b (lit 2)})))
+    (is (false? (pr {'?a (lit 1) '?b (lit 9)})))))
