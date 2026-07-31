@@ -98,9 +98,42 @@
   (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
                (parser/parse "SELECT ?s WHERE { ?s"))))
 
-(deftest unsupported-form-throws
+(deftest an-unknown-query-form-still-throws
+  ;; This used to use CONSTRUCT as its example of an unsupported form. CONSTRUCT
+  ;; parses now, so the test needs a form that genuinely does not exist.
   (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
-               (parser/parse "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }"))))
+               (parser/parse "DELETE { ?s ?p ?o } WHERE { ?s ?p ?o }"))))
+
+(deftest construct-parses-its-template-and-pattern
+  (let [{:keys [form template algebra]} (parser/parse "CONSTRUCT { ?s <urn:x> ?o } WHERE { ?s <urn:y> ?o }")]
+    (is (= :construct form))
+    (is (= 1 (count template)))
+    (is (= 3 (count (first template))) "a template triple is [s p o], the shape a BGP takes")
+    (is (some? algebra))))
+
+(deftest an-empty-construct-template-is-refused
+  (is (thrown-with-msg? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                        #"template is empty"
+                        (parser/parse "CONSTRUCT { } WHERE { ?s ?p ?o }"))))
+
+(deftest describe-has-two-forms-and-says-which
+  (testing "DESCRIBE <iri> names its subjects; DESCRIBE ?v WHERE resolves them.
+            Both are in the spec, they evaluate differently, and the form
+            records which one it is rather than leaving the handler to infer it
+            from whether :algebra happens to be nil"
+    (let [a (parser/parse "DESCRIBE <urn:alice>")]
+      (is (= :describe (:form a)))
+      (is (= 1 (count (:terms a))))
+      (is (nil? (:algebra a))))
+    (let [b (parser/parse "DESCRIBE ?s WHERE { ?s <urn:role> \"admin\" }")]
+      (is (= :describe-solutions (:form b)))
+      (is (= '[?s] (:output-vars b)))
+      (is (some? (:algebra b))))))
+
+(deftest describe-needs-something-to-describe
+  (is (thrown-with-msg? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                        #"at least one IRI or variable"
+                        (parser/parse "DESCRIBE"))))
 
 ;; --- ORDER BY DESC ---------------------------------------------------------
 

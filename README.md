@@ -209,3 +209,32 @@ The `:test` alias in `deps.edn` is the JVM **compat** suite only (`clojure
 ## License
 
 Apache-2.0
+
+## CONSTRUCT and DESCRIBE return a graph, not a table
+
+`SELECT`/`ASK` answer a solution table as `application/sparql-results+json`.
+`CONSTRUCT`/`DESCRIBE` answer an RDF **graph**, which that format has no way to
+express — so they answer **N-Triples** (`application/n-triples`).
+
+```
+CONSTRUCT { ?u <urn:kotobase:isNamed> ?n } WHERE { ?u <urn:kotobase:name> ?n }
+DESCRIBE <urn:kotobase:users/u1>
+DESCRIBE ?u WHERE { ?u <urn:kotobase:role> "admin" }
+```
+
+**Content negotiation depends on the form, not just the header.** Asking for
+`sparql-results+json` with a `CONSTRUCT` is a 406, not a graph mislabelled as a
+solution table; asking for N-Triples with a `SELECT` is a 406 too. A request
+with no `Accept` gets whichever single format its form has.
+
+N-Triples rather than Turtle or RDF/XML: it is a required serialization in the
+protocol, it is line-oriented so a large graph streams and diffs, and it needs
+no prefix bookkeeping so there is nothing to get wrong between writer and
+reader. Output is sorted, because the input is a set and two identical graphs
+should serialize identically — the determinism is for whoever diffs it, not
+part of RDF's meaning.
+
+`DESCRIBE` returns the **subject triples**, not the Concise Bounded Description
+the spec permits: CBD follows blank nodes and there is no blank-node syntax
+here to follow. The spec leaves the shape implementation-defined so a service
+can say which one it returns.

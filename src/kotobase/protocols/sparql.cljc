@@ -41,7 +41,7 @@
     (https://www.w3.org/TR/sparql11-results-json/) for both `SELECT` and
     `ASK`. Any other `Accept` value that does not also accept JSON gets
     `406 Not Acceptable` -- **XML and CSV results formats are explicitly
-    NOT implemented in v0.1** (ADR-2607172300 / the task brief for this
+    NOT implemented for SELECT/ASK** (ADR-2607172300 / the task brief for this
     repo: \"XML/CSV are a nice-to-have, not required for v0.1\").
   - The query LANGUAGE subset is exactly what `kotoba-lang/sparql`'s
     algebra + `kotobase.protocols.sparql.parser`'s translation support --
@@ -54,6 +54,7 @@
   (:require [clojure.string :as str]
             [kotobase.query.bridge :as bridge]
             [kotobase.protocols.sparql.json :as json]
+            [kotobase.protocols.sparql.ntriples :as nt]
             [kotobase.protocols.sparql.parser :as parser]
             [kotobase.protocols.sparql.quads :as quads]
             [kotobase.protocols.sparql.results :as results]
@@ -140,6 +141,29 @@
 
 ;; ------------------------------------------------------------------ handle
 
+(def ^:private graph-forms
+  "The two forms whose answer is an RDF graph rather than a solution table."
+  #{:construct :describe :describe-solutions})
+
+(defn- graph-form? [form] (contains? graph-forms form))
+
+(defn- accepts-ntriples?
+  "Whether the client will take N-Triples. `*/*` and a missing header count,
+  same as the JSON path: a client that expressed no preference gets the one
+  format there is rather than a 406 telling it so."
+  [accept]
+  (let [a (str/lower-case (or accept ""))]
+    (or (str/blank? a)
+        (str/includes? a "*/*")
+        (str/includes? a nt/content-type)
+        (str/includes? a "text/plain"))))
+
+(defn- ntriples-response [graph]
+  (response 200
+            {"content-type" (str nt/content-type "; charset=utf-8")
+             "cache-control" "no-store"}
+            (nt/graph->ntriples graph)))
+
 (defn handle
   "SPARQL 1.1 Protocol handler. `ctx` is `{:store IStore, :coll-keys
   [\"coll1\" ...], :visible? (fn [{:keys [s p o]}]) -> bool}`. `:coll-keys`
@@ -170,13 +194,26 @@
         (str/blank? (or query-text ""))
         (error-response 400 "missing 'query' -- GET ?query=..., POST application/sparql-query body, or POST application/x-www-form-urlencoded 'query' field")
 
-        (not (accepts-json? (header req "accept")))
-        (error-response 406 "only application/sparql-results+json is supported in v0.1 (no XML/CSV yet)")
-
         :else
         (let [parsed (try (parser/parse query-text) (catch #?(:clj Exception :cljs :default) e e))]
-          (if (instance? #?(:clj Exception :cljs js/Error) parsed)
+          (cond
+            (instance? #?(:clj Exception :cljs js/Error) parsed)
             (error-response 400 (str "SPARQL parse error: " #?(:clj (.getMessage ^Exception parsed) :cljs (.-message parsed))))
+
+            ;; Content negotiation depends on the FORM, not just the header:
+            ;; SELECT/ASK answer a solution table and CONSTRUCT/DESCRIBE answer
+            ;; a graph, and `application/sparql-results+json` has no way to say
+            ;; "these are triples". Checking the header before knowing which
+            ;; one was asked for is how a graph ends up mislabelled as a
+            ;; results table.
+            (and (graph-form? (:form parsed)) (not (accepts-ntriples? (header req "accept"))))
+            (error-response 406 (str "CONSTRUCT and DESCRIBE return an RDF graph; only "
+                                     nt/content-type " is supported (no Turtle or RDF/XML yet)"))
+
+            (and (not (graph-form? (:form parsed))) (not (accepts-json? (header req "accept"))))
+            (error-response 406 "only application/sparql-results+json is supported for SELECT and ASK (no XML/CSV yet)")
+
+            :else
             ;; db-for memoises when ctx carries a content address, and builds
             ;; fresh when it does not (ADR-2607310900 L1).
             (let [db (bridge/db-for ctx store coll-keys)
@@ -184,4 +221,10 @@
               (case (:form parsed)
                 :select (json-response 200 (results/select->json (:output-vars parsed)
                                                                    (sparql/select (:algebra parsed) quad-seq)))
-                :ask (json-response 200 (results/ask->json (sparql/ask (:algebra parsed) quad-seq)))))))))))
+                :ask (json-response 200 (results/ask->json (sparql/ask (:algebra parsed) quad-seq)))
+                :construct (ntriples-response
+                            (sparql/construct (:template parsed) (:algebra parsed) quad-seq))
+                :describe (ntriples-response (sparql/describe (:terms parsed) quad-seq))
+                :describe-solutions (ntriples-response
+                                     (sparql/describe-solutions (:output-vars parsed)
+                                                                (:algebra parsed) quad-seq))))))))))
