@@ -164,6 +164,21 @@
              "cache-control" "no-store"}
             (nt/graph->ntriples graph)))
 
+(defn scan-patterns
+  "Every `[s p o]` a parsed query needs from a `datom.source/IPatternSource`.
+
+  Public because the prefetch is the DEPLOY SHELL's job, not this handler's:
+  scanning the source is asynchronous and this handler is synchronous by
+  contract, so a shell parses, prefetches, and only then calls `handle` with
+  `:source` in ctx, using `kotobase.protocols.sparql.parser/parse`.
+
+  DESCRIBE has no algebra — it names terms and wants every triple they appear
+  in, which is a scan per term in each position."
+  [parsed]
+  (if (= :describe (:form parsed))
+    (quads/describe-scan-patterns (:terms parsed))
+    (quads/algebra->scan-patterns (:algebra parsed))))
+
 (defn handle
   "SPARQL 1.1 Protocol handler. `ctx` is `{:store IStore, :coll-keys
   [\"coll1\" ...], :visible? (fn [{:keys [s p o]}]) -> bool}`. `:coll-keys`
@@ -176,8 +191,14 @@
   quads` ns docstring for why it is enforced here rather than via
   `bridge/q`.
 
-  v0.1 re-materializes `:coll-keys` from `:store` on EVERY request (no
-  caching between requests) -- the same linear-scan limitation
+  ctx may instead carry `:source` -- a `datom.source/IPatternSource` the
+  deploy shell has already prefetched for this query's patterns (see
+  `scan-patterns`). Then `:store`/`:coll-keys` are not read at all and what
+  the query costs is its own patterns rather than the whole plane
+  (superproject ADR-2608039970).
+
+  Without `:source`, v0.1 re-materializes `:coll-keys` from `:store` on EVERY
+  request (no caching between requests) -- the same linear-scan limitation
   `kotobase.query.bridge/materialize` itself documents; this handler adds
   no caching on top of it."
   [{:keys [store coll-keys visible?] :as ctx} req]
@@ -214,10 +235,20 @@
             (error-response 406 "only application/sparql-results+json is supported for SELECT and ASK (no XML/CSV yet)")
 
             :else
-            ;; db-for memoises when ctx carries a content address, and builds
-            ;; fresh when it does not (ADR-2607310900 L1).
-            (let [db (bridge/db-for ctx store coll-keys)
-                  quad-seq (quads/datoms->quads db visible?)]
+            ;; Two ways to get the quads, and the ctx says which:
+            ;;
+            ;; `:source` — a datom.source/IPatternSource, already prefetched
+            ;; for THIS query's patterns by the deploy shell (the scan is
+            ;; async, this handler is sync — same split the kotobase Worker
+            ;; uses for documents). Reads the patterns the algebra names.
+            ;;
+            ;; otherwise — materialize the whole plane and run the algebra
+            ;; over it. `db-for` memoises when ctx carries a content address
+            ;; and builds fresh when it does not (ADR-2607310900 L1).
+            (let [quad-seq (if-let [source (:source ctx)]
+                             (quads/source->quads source (scan-patterns parsed) visible?)
+                             (quads/datoms->quads (bridge/db-for ctx store coll-keys)
+                                                  visible?))]
               (case (:form parsed)
                 :select (json-response 200 (results/select->json (:output-vars parsed)
                                                                    (sparql/select (:algebra parsed) quad-seq)))

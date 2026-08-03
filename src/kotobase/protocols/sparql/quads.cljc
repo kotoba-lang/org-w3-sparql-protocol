@@ -40,6 +40,7 @@
   triple-by-triple BEFORE the term transform. Passing `(constantly true)` is
   a caller's explicit choice, never this namespace's default."
   (:require [clojure.string :as str]
+            [datom.source :as src]
             [kotobase.query.bridge :as bridge]))
 
 ;; --------------------------------------------------------------- IRI terms
@@ -123,6 +124,81 @@
   `:kotobase/*` synthetic attrs) -> an IRI term."
   [p] (iri (kw->iri-string p)))
 
+;; ------------------------------------------------- algebra -> scan patterns
+;;
+;; The pushdown half (superproject ADR-2608039970 / kotobase-client#19). A
+;; `datom.source/IPatternSource` answers `[s p o]`; the algebra already says
+;; which `[s p o]`s a query needs. Handing those to the source is the
+;; difference between reading the patterns a query names and reading the
+;; database.
+
+(defn iri-string->component
+  "`urn:kotobase:alice` -> `\"alice\"` -- the RAW suffix, as a source's `:s`/
+  `:p` carries it.
+
+  Deliberately not `iri-string->kw`, which returns a KEYWORD because
+  `kotobase.query.bridge/materialize` mints keyword entities. A source over
+  the Datomic API's index reads carries the entity/attribute strings the rows
+  themselves carry (`{e a v_edn added}`), and a keyword would match none of
+  them. Two backends, two identities, one IRI form."
+  [s]
+  (when (and (string? s) (str/starts-with? s "urn:kotobase:"))
+    (subs s (count "urn:kotobase:"))))
+
+(defn term->component
+  "One SPARQL term (or a `?var` symbol) -> the value a source pattern binds
+  in that position, or nil for a wildcard.
+
+  A variable is a wildcard. An IRI is an entity/attribute identity. A literal
+  binds its own value -- objects are stored as wire strings, and the parser
+  produces the same two-key literal shape from query text, so the comparison
+  is the one the source can actually make."
+  [t]
+  (cond
+    (nil? t) nil
+    (symbol? t) nil
+    (and (map? t) (= :iri (:rdf/type t))) (iri-string->component (:value t))
+    (and (map? t) (= :literal (:rdf/type t))) (:value t)
+    :else nil))
+
+(defn triple-pattern->scan
+  "A SPARQL triple pattern -> the `[s p o]` a source scans."
+  [[s p o]]
+  [(term->component s) (term->component p) (term->component o)])
+
+(defn algebra->scan-patterns
+  "Every `[s p o]` an algebra tree will need, deduplicated.
+
+  Walks `:patterns` (BGP) and recurses through the shapes
+  `kotoba-lang/sparql` defines: `:pattern` (filter/project/distinct/
+  order-by/slice) and `:left`/`:right` (join/union/optional). An unknown node
+  contributes nothing rather than throwing -- a missed pattern is a missing
+  read, which surfaces as a wrong answer in a test, whereas a throw here
+  would take out queries that are otherwise fine. Add the node shape when one
+  appears; do not make this lenient by design."
+  [algebra]
+  (letfn [(walk [node]
+            (when (map? node)
+              (concat (map triple-pattern->scan (:patterns node))
+                      (walk (:pattern node))
+                      (walk (:left node))
+                      (walk (:right node)))))]
+    (vec (distinct (walk algebra)))))
+
+(defn describe-scan-patterns
+  "DESCRIBE has no algebra: it names terms and wants every triple they appear
+  in. That is two scans per term -- as subject, and as object.
+
+  The object-position scan has no index behind it (see
+  `kotobase.datom-source`'s plan table: `:vaet` covers ref-valued attributes
+  only), so a DESCRIBE costs a full scan per term. Stated here rather than
+  discovered in production."
+  [terms]
+  (vec (distinct (mapcat (fn [t]
+                           (let [c (term->component t)]
+                             [[c nil nil] [nil nil c]]))
+                         terms))))
+
 ;; ------------------------------------------------------------- db -> quads
 
 (defn datoms->quads
@@ -148,3 +224,34 @@
                 :predicate (->predicate-term p)
                 :object (->term o)}))
         (bridge/datoms db visible?)))
+
+(defn source->quads
+  "`patterns` scanned against a `datom.source/IPatternSource` -> the same RDF
+  quads `datoms->quads` produces from a materialized db.
+
+  The difference is what gets read. `datoms->quads` takes the whole plane and
+  then runs an algebra over it; this takes the patterns the algebra names.
+  For a query naming two predicates that is two index ranges, whatever the
+  graph's size (superproject ADR-2608039970; the source itself is
+  `kotobase.datom-source`).
+
+  The union is a SET before the term transform: two patterns of a query
+  routinely overlap (`[?s :knows ?o]` and `[?s ?p \"bob\"]` both return the
+  same datom), and a bag here would make `sparql.core`'s DISTINCT and its
+  solution counts wrong in a way no test of this fn alone would catch.
+
+  `visible?` is REQUIRED, same discipline and same triple-map shape as
+  `datoms->quads`, applied before the term transform."
+  [source patterns visible?]
+  (when-not (ifn? visible?)
+    (throw (ex-info "source->quads: visible? is required (no permissive default, ADR-2607050500)"
+                     {:type ::visible?-required})))
+  (into []
+        (comp (filter visible?)
+              (map (fn [{:keys [s p o]}]
+                     {:subject (->subject-term s)
+                      :predicate (->predicate-term p)
+                      :object (->term o)})))
+        (reduce (fn [acc pattern] (into acc (src/scan source pattern)))
+                #{}
+                patterns)))
