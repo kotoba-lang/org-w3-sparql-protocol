@@ -32,22 +32,34 @@ this repo follows the org's existing `org-w3-*` reverse-domain convention
   the parser ever emits is one of the 8 `:sparql/op` shapes that repo's
   README documents.
 
-## The integration decision: `materialize` + our own quad transform, NOT `bridge/q`
+## The integration decision: `materialize` + our own quad transform, not `bridge/q`
 
-`kotobase-query`'s bridge offers two things: `materialize` (`IStore` +
-collection keys → an `arrangement.core` db) and `q`/`query` (run a
-Datomic-shaped `:find`/`:where` query over that db via `arrangement.datalog`).
-**This repo uses `materialize` only.** `kotoba-lang/sparql` already has its
-own complete algebra (BGP/join/filter/union/optional/project/distinct/
-order-by/slice) over a plain in-memory quad seq — routing every SPARQL query
-through `arrangement.datalog` first would mean translating SPARQL algebra
-INTO Datalog algebra and back for no benefit. Instead:
-`kotobase.protocols.sparql.quads/datoms->quads` walks the materialized db's
-`:spo` index directly (the exact same fully-unbound-scan shape
-`arrangement.query`'s own `:else` branch produces) and transforms each
-`{:s :p :o}` triple into an `rdf.core`-shaped RDF quad
-(`{:subject :predicate :object}`, term maps `{:rdf/type :iri|:literal :value
-...}`) ready for `sparql.core/select`/`sparql.core/ask`.
+`kotobase-query`'s bridge offers `materialize` (`IStore` + collection keys →
+an `arrangement.core` db), a set of access paths over that db, and `q`/`query`
+(a Datomic-shaped `:find`/`:where` frontend). **This repo uses `materialize`
+and `datoms`, and never `q`.** `kotoba-lang/sparql` already has its own
+complete algebra (BGP/join/filter/union/optional/project/distinct/order-by/
+slice) over a plain in-memory quad seq — routing every SPARQL query through
+`arrangement.datalog` first would mean translating SPARQL algebra INTO Datalog
+algebra and back for no benefit.
+
+**This is the supported path, not a deviation from one.**
+[ADR-2608039970](https://github.com/com-junkawasaki/root/blob/main/90-docs/adr/2608039970-kotobase-base-is-the-datom-plane-not-datalog.edn)
+(`com-junkawasaki/root`): what the query surfaces share is the **datom plane**
+— `materialize` — not Datalog. `q` is one frontend over that plane and this
+repo is another; they are peers. The ADR was written *from* this repo's
+behaviour, which had been correct and undocumented since it landed. What was
+missing was anything saying so, which left the one surface doing the right
+thing looking like the odd one out.
+
+`kotobase.protocols.sparql.quads/datoms->quads` takes every triple via
+`bridge/datoms` and transforms each `{:s :p :o}` into an `rdf.core`-shaped RDF
+quad (`{:subject :predicate :object}`, term maps `{:rdf/type :iri|:literal
+:value ...}`) ready for `sparql.core/select`/`sparql.core/ask`. It used to
+walk `(:spo db)` itself, because the bridge exposed no full-plane scan — a raw
+index read, with nothing on the supported path to apply `visible?` for it.
+`bridge/datoms` is that scan (kotoba-lang/kotobase-query#7), and using it puts
+the predicate back where the plane is read rather than one layer above it.
 
 **Doc-map keys and materialized entities become IRIs** (`kw->iri-string`:
 `:users/u1` → `urn:kotobase:users/u1`, `:role` → `urn:kotobase:role`) so BGP
@@ -58,15 +70,15 @@ field like `:dept-key "d1"` is a plain string that joins against the target
 entity's `:kotobase/key` literal, not an IRI reference) — see
 `kotobase.protocols.sparql.quads`'s ns docstring for the full reasoning.
 
-### `visible?` — required, applied in our own quad transform, not via `bridge/q`
+### `visible?` — required, on the scan and at our boundary
 
-Every `kotobase-query`/`arrangement.datalog` query function requires an
-explicit `visible?` predicate (ADR-2607050500, "query as first-class
-effect" — no permissive default). Because this repo bypasses `bridge/q`
-entirely (see above), that enforcement point never fires for us. So
-`datoms->quads` re-implements the identical discipline at the one place
-redaction can actually happen here: it takes `visible?` as a **required**
-argument (`(fn [{:keys [s p o]}]) -> bool`, the exact same triple-map shape
+Every path into the plane requires an explicit `visible?` predicate
+(ADR-2607050500, "query as first-class effect" — no permissive default), and
+that now includes the scan itself: `bridge/datoms` refuses a missing or
+non-callable predicate before reading anything. `datoms->quads` keeps its own
+check as well — it is this repo's error, with this repo's message, at this
+repo's boundary, and the two agree rather than one standing in for the other.
+It takes `visible?` as a **required** argument (`(fn [{:keys [s p o]}]) -> bool`, the exact same triple-map shape
 `arrangement.query`/`bridge/q` already use) and applies it as a post-filter
 over every candidate triple **before** it becomes a queryable RDF quad.
 `(constantly true)` is a caller's explicit choice, never this repo's

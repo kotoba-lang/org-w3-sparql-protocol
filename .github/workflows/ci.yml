@@ -19,7 +19,7 @@ jobs:
         with:
           repository: kotoba-lang/kotobase-query
           # Same pin as deps.edn -- keep the two in lockstep.
-          ref: be8ba52b5e6581bb0489f35480ebea925c9fb478
+          ref: b8bb880d56d242f9a98bd4a9c0375abb4b633bdb
           path: .deps/kotobase-query
       - uses: actions/checkout@v4
         with:
