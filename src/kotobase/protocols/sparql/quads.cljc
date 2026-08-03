@@ -3,39 +3,44 @@
   db into a seq of `kotoba-lang/sparql`-shaped RDF quads (`{:subject
   :predicate :object}`, each position an `rdf.core`-style term map).
 
-  ## Why we walk `:spo` instead of calling `bridge/q`/`arrangement.datalog`
+  ## Why we take the whole plane instead of calling `bridge/q`
 
   `kotoba-lang/sparql` (this protocol repo's query engine) has its own
   complete algebra -- BGP/join/filter/union/optional/project/distinct/
   order-by/slice -- and expects a plain in-memory seq of quads, not a
   `:find`/`:where` Datalog query. Routing every SPARQL query through
   `arrangement.datalog/q` first would mean translating SPARQL algebra INTO
-  Datalog algebra and back, for no benefit -- `bridge/materialize` already
-  gives us the `arrangement.core` db (`{:spo {s {p #{o...}}}}`, a 4-covering
-  index) directly, and its `:spo` sub-index alone is already exactly `{s
-  {p #{o...}}}`, a full enumeration of every `{:s :p :o}` triple in the db
-  (`arrangement.query`'s own fully-unbound scan does the identical `(for
-  [[s pm] (:spo db) [p os] pm o os] ...)` walk -- see
-  `arrangement.query/query*`'s `:else` branch). So: `materialize` once,
-  walk `:spo` once, hand `sparql.core` a plain seq. `bridge/q` is simply
-  the wrong tool for a caller that already has its own join/filter engine.
+  Datalog algebra and back, for no benefit.
 
-  ## `visible?` -- required, not defaulted, applied here instead of via `q`
+  **This is the SUPPORTED path, not a deviation from one** (ADR-2608039970 in
+  `com-junkawasaki/root`). What the query surfaces share is the datom plane
+  -- `bridge/materialize` -- not Datalog: `q` is one frontend over that
+  plane and this repo is another, and they are peers. The ADR was written
+  from this repo's behaviour, which had been correct and undocumented since
+  it landed; what was missing was anything saying so.
 
-  `kotobase.query.bridge/q`/`arrangement.datalog/q` take `visible?` as a
-  required argument (ADR-2607050500 -- \"query as first-class effect\", no
-  permissive default). Because we bypass `q` entirely (see above), that
-  enforcement point does not fire for us -- so this namespace re-implements
-  the identical discipline at the one place redaction can actually happen
-  for this repo: `datoms->quads` below takes `visible?` as a REQUIRED
-  positional argument (no arity omits it) and applies it as a post-filter
-  over every candidate `{:s :p :o}` triple BEFORE it becomes a queryable
-  RDF quad, exactly mirroring `arrangement.query/query`'s own contract
-  (`visible?` is `(fn [{:keys [s p o]}]) -> bool`, applied triple-by-triple,
-  same argument shape callers already use against `bridge/q`). Passing
-  `(constantly true)` is a caller's explicit choice, never this namespace's
-  default."
-  (:require [clojure.string :as str]))
+  So: `materialize` once, take every triple via `bridge/datoms`, hand
+  `sparql.core` a plain seq.
+
+  This namespace used to walk `(:spo db)` itself, because the bridge exposed
+  no full-plane scan -- a raw index read, with nothing on the supported path
+  to apply `visible?` for it. `bridge/datoms` is that scan
+  (kotoba-lang/kotobase-query#7), and using it puts the predicate back where
+  the plane is read rather than one layer above it.
+
+  ## `visible?` -- required, not defaulted
+
+  `visible?` is REQUIRED on every path into the plane (ADR-2607050500 --
+  \"query as first-class effect\", no permissive default), and that now
+  includes the scan itself: `bridge/datoms` refuses a missing or
+  non-callable predicate before reading anything. `datoms->quads` keeps its
+  own check as well -- it is this repo's error, with this repo's message, at
+  this repo's boundary, and the two agree rather than one standing in for
+  the other. `visible?` is `(fn [{:keys [s p o]}]) -> bool`, applied
+  triple-by-triple BEFORE the term transform. Passing `(constantly true)` is
+  a caller's explicit choice, never this namespace's default."
+  (:require [clojure.string :as str]
+            [kotobase.query.bridge :as bridge]))
 
 ;; --------------------------------------------------------------- IRI terms
 
@@ -120,35 +125,26 @@
 
 ;; ------------------------------------------------------------- db -> quads
 
-(defn spo-seq
-  "Every `{:s :p :o}` triple in an `arrangement.core` db's `:spo` index --
-  the same fully-unbound scan `arrangement.query/query*`'s `:else` branch
-  performs, done directly instead of through that namespace since we have
-  no `pattern`/only need the raw enumeration."
-  [db]
-  (for [[s pm] (:spo db) [p os] pm o os] {:s s :p p :o o}))
-
 (defn datoms->quads
   "`db` (the return of `kotobase.query.bridge/materialize`) -> a vector of
   `kotoba-lang/sparql`-shaped RDF quads (`{:subject :predicate :object}`
   term maps), ready to hand to `sparql.core/select`/`sparql.core/ask`.
 
   `visible?` is REQUIRED -- `(fn [{:keys [s p o]}]) -> bool`, the SAME
-  triple-map shape `arrangement.query`/`kotobase.query.bridge/q` already
-  use, applied as a post-filter over every candidate `{:s :p :o}` BEFORE
-  the term transform -- see the ns docstring's \"visible? -- required, not
-  defaulted\" section for why this repo re-implements that discipline here
-  instead of via `bridge/q`. Pass `(constantly true)` to see everything
-  materialized; that is a caller's explicit choice, never this fn's
-  default (there is no 3-arity that omits it)."
+  triple-map shape `kotobase.query.bridge`'s access paths use, applied to
+  every `{:s :p :o}` BEFORE the term transform. `bridge/datoms` applies it
+  to the scan; the check below is this repo's own, at this repo's boundary,
+  so a caller gets this repo's error rather than one from underneath it.
+  Pass `(constantly true)` to see everything materialized; that is a
+  caller's explicit choice, never this fn's default (there is no 3-arity
+  that omits it)."
   [db visible?]
   (when-not (ifn? visible?)
     (throw (ex-info "datoms->quads: visible? is required (no permissive default, ADR-2607050500)"
                      {:type ::visible?-required})))
   (into []
-        (comp (filter visible?)
-              (map (fn [{:keys [s p o]}]
-                     {:subject (->subject-term s)
-                      :predicate (->predicate-term p)
-                      :object (->term o)})))
-        (spo-seq db)))
+        (map (fn [{:keys [s p o]}]
+               {:subject (->subject-term s)
+                :predicate (->predicate-term p)
+                :object (->term o)}))
+        (bridge/datoms db visible?)))
