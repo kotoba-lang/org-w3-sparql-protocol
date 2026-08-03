@@ -93,8 +93,23 @@
   (is (= "users/u1" (quads/term->component (quads/iri "urn:kotobase:users/u1")))
       "the RAW suffix — a keyword would match no row of a Datomic-API source")
   (is (= "tea" (quads/term->component (quads/->literal "tea"))))
-  (is (nil? (quads/term->component (quads/iri "http://example.org/x")))
-      "a foreign IRI binds nothing rather than being coerced into one"))
+  (is (= "http://example.org/x" (quads/term->component (quads/iri "http://example.org/x")))
+      "a foreign IRI binds ITSELF — nil is a wildcard, which would read every
+       datom and answer rows the query never asked for"))
+
+(deftest a-bare-attr-iri-is-the-kotobase-shorthand
+  (testing "the form kotobase-server's graph.sparql has always taken. Without
+            this, swapping that surface's implementation turns
+            `?e <:sp/name> \"alice\"` into a pattern that matches nothing —
+            or into a wildcard. Not an error: a wrong answer"
+    (is (= "urn:kotobase::sp/name" (:value (quads/iri ":sp/name"))))
+    (is (= ":sp/name" (quads/term->component (quads/iri ":sp/name"))))
+    (is (= (quads/iri ":sp/name") (quads/iri "urn:kotobase::sp/name"))
+        "one attribute, one term, whichever spelling the query used — BGP
+         matching is plain = on terms")
+    (is (= "http://example.org/x" (:value (quads/iri "http://example.org/x")))
+        "a foreign IRI is left exactly as written, not coerced into the
+         kotobase namespace")))
 
 (deftest describe-scans-both-positions-per-term
   (is (= [["alice" nil nil] [nil nil "alice"]]

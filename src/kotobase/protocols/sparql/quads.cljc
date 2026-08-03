@@ -87,7 +87,38 @@
         (keyword (subs rest' 0 i) (subs rest' (inc i)))
         (keyword rest')))))
 
-(defn iri [v] {:rdf/type :iri :value v})
+(def kotobase-iri-prefix "urn:kotobase:")
+
+(defn canonical-iri
+  "The one IRI form this surface compares on, given whatever a query wrote.
+
+  `urn:kotobase:...` is the surface's own scheme (`kw->iri-string` emits it
+  for every entity and attribute), so a term already in that form is left
+  alone. **A bare `<:attr>` is accepted as shorthand for it** —
+  `<:sp/name>` -> `urn:kotobase::sp/name` — because that is the form
+  `kotobase-server`'s `graph.sparql` has always taken (`kotobase.server.
+  sparql` reads `<X>` as the attribute string `X` directly), and every
+  existing caller writes queries that way.
+
+  Without this, swapping that surface's implementation would turn
+  `?e <:sp/name> \"alice\"` into a pattern whose predicate matches nothing —
+  or, worse, into a WILDCARD. Not an error: a wrong answer.
+
+  Anything else (`http://example.org/x`) is left exactly as written. It then
+  equals no term this surface emits and therefore matches nothing, which is
+  the truth: there is no such datom. It is deliberately NOT coerced into the
+  kotobase namespace, and deliberately NOT turned into a wildcard."
+  [v]
+  (if (and (string? v) (str/starts-with? v ":"))
+    (str kotobase-iri-prefix v)
+    v))
+
+(defn iri
+  "An IRI term. The value is canonicalized (see `canonical-iri`) so that one
+  attribute has one term, whichever spelling the query used — BGP matching is
+  plain `=` on terms, so two spellings of the same attribute would otherwise
+  simply never join."
+  [v] {:rdf/type :iri :value (canonical-iri v)})
 
 (defn ->literal
   "Plain literal term for `v` -- `{:rdf/type :literal :value v}`, `v`
@@ -157,7 +188,13 @@
   (cond
     (nil? t) nil
     (symbol? t) nil
-    (and (map? t) (= :iri (:rdf/type t))) (iri-string->component (:value t))
+    (and (map? t) (= :iri (:rdf/type t)))
+    (or (iri-string->component (:value t))
+        ;; A foreign IRI binds ITSELF, not nil. nil is a WILDCARD here, and a
+        ;; wildcard reads every datom and answers rows the query never asked
+        ;; for — strictly worse than an empty answer. This bound it to nil
+        ;; before ADR-2608039970's follow-up; it was wrong.
+        (:value t))
     (and (map? t) (= :literal (:rdf/type t))) (:value t)
     :else nil))
 
