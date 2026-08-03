@@ -3,6 +3,9 @@
             [kotobase.local :as local]
             [kotobase.store :as st]
             [kotobase.query.bridge :as bridge]
+            [datom.source :as src]
+            [kotobase.protocols.sparql :as sparql]
+            [kotobase.protocols.sparql.parser :as parser]
             [kotobase.protocols.sparql.quads :as quads]))
 
 (defn- fixture-store []
@@ -73,3 +76,50 @@
     (is (= 2 (count qs)))
     (is (= #{"urn:kotobase:v2" "urn:kotobase:ok"}
            (into #{} (map (comp :value :predicate)) qs)))))
+
+;; ── pattern pushdown (ADR-2608039970 / kotobase-client#19) ──────────────────
+
+(deftest a-query-scans-only-the-patterns-it-names
+  (testing "the whole point: what is read is the algebra's patterns, not the
+            plane. A source that recorded a scan for a pattern the query never
+            mentions would fail this"
+    (let [parsed (parser/parse "SELECT ?n WHERE { ?s <urn:kotobase:role> \"admin\" . ?s <urn:kotobase:name> ?n }")]
+      (is (= [[nil "role" "admin"] [nil "name" nil]]
+             (sparql/scan-patterns parsed))))))
+
+(deftest terms-map-to-the-components-a-source-binds
+  (is (= nil (quads/term->component '?s)) "a variable is a wildcard")
+  (is (= "alice" (quads/term->component (quads/iri "urn:kotobase:alice"))))
+  (is (= "users/u1" (quads/term->component (quads/iri "urn:kotobase:users/u1")))
+      "the RAW suffix — a keyword would match no row of a Datomic-API source")
+  (is (= "tea" (quads/term->component (quads/->literal "tea"))))
+  (is (nil? (quads/term->component (quads/iri "http://example.org/x")))
+      "a foreign IRI binds nothing rather than being coerced into one"))
+
+(deftest describe-scans-both-positions-per-term
+  (is (= [["alice" nil nil] [nil nil "alice"]]
+         (quads/describe-scan-patterns [(quads/iri "urn:kotobase:alice")]))))
+
+(deftest the-two-backends-answer-the-same-quads
+  (testing "materialized db and pattern source are interchangeable — if they
+            disagree, swapping backends silently changes query results"
+    (let [store (fixture-store)
+          db (bridge/materialize store ["users"])
+          from-db (set (quads/datoms->quads db (constantly true)))
+          source (src/of-quads (bridge/datoms db (constantly true)))
+          from-src (set (quads/source->quads source [[nil nil nil]] (constantly true)))]
+      (is (= from-db from-src)))))
+
+(deftest source-quads-are-a-set-before-the-term-transform
+  (testing "two overlapping patterns must not double-count — DISTINCT and the
+            solution count both read from this"
+    (let [source (src/of-quads [{:s "alice" :p "knows" :o "bob"}])
+          quads (quads/source->quads source
+                                     [[nil "knows" nil] ["alice" nil nil] [nil nil "bob"]]
+                                     (constantly true))]
+      (is (= 1 (count quads))))))
+
+(deftest source-quads-require-visible
+  #_:clj-kondo/ignore
+  (is (thrown? #?(:clj Exception :cljs js/Error)
+               (quads/source->quads (src/of-quads []) [[nil nil nil]]))))

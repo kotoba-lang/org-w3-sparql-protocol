@@ -19,7 +19,11 @@
  ;; has no dependency resolver, so bin/run_tests.cljs / CI clone each
  ;; transitive dep by hand into its own .deps/<name> -- see the README's
  ;; Develop/test section for the exact command.
- :deps {io.github.kotoba-lang/sparql
+ ;; datom-source is the IPatternSource contract this repo's `source->quads`
+ ;; scans (the pushdown path, ADR-2608039970). Zero deps of its own.
+ :deps {io.github.kotoba-lang/datom-source
+        {:git/sha "b42f6e6ff942c7f8a2856f8142ebffc13aa11098"}
+        io.github.kotoba-lang/sparql
         {:git/sha "1029b50cbbbdbc4f76a7c2e7bf86728068ef368b"}
         io.github.kotoba-lang/kotobase-query
         {:git/sha "b8bb880d56d242f9a98bd4a9c0375abb4b633bdb"}}
