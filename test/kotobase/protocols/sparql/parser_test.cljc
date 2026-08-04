@@ -247,3 +247,54 @@
             ungrouped rows"
     (is (thrown? #?(:clj Exception :cljs js/Error)
                  (parser/parse "SELECT ?n WHERE { ?e <urn:kotobase:n> ?n } GROUP BY ?n")))))
+
+;; ── FILTER comparison: numeric when both sides are numbers ─────────────────
+
+(defn- filter-pred
+  "The compiled predicate of a `FILTER(...)` in a parsed query."
+  [q]
+  (let [alg (:algebra (parser/parse q))
+        find-filter (fn find-filter [n]
+                      (cond
+                        (not (map? n)) nil
+                        (= :filter (:sparql/op n)) (:pred n)
+                        :else (some find-filter [(:pattern n) (:left n) (:right n)])))]
+    (find-filter alg)))
+
+(def ^:private q-gt
+  "SELECT ?e WHERE { ?e <urn:kotobase:age> ?v . FILTER(?v > 25) }")
+
+(deftest a-stringified-number-compares-numerically
+  (testing "a datom plane stringifies on write, so 30 arrives as \"30\".
+            Comparing that to 25 as strings answers \"30\" > \"25\" — right by
+            luck here and wrong the moment the numbers are 9 and 10"
+    (let [pred (filter-pred q-gt)]
+      (is (true? (pred {'?v {:rdf/type :literal :value "30"}})))
+      (is (false? (pred {'?v {:rdf/type :literal :value "20"}})))
+      (is (true? (pred {'?v {:rdf/type :literal :value 30}}))
+          "real numbers still compare as numbers"))))
+
+(deftest the-case-string-ordering-gets-wrong
+  (testing "\"9\" > \"10\" lexicographically, 9 < 10 numerically. This is the
+            assertion that would have failed before the rule existed"
+    (let [pred (filter-pred "SELECT ?e WHERE { ?e <urn:kotobase:n> ?v . FILTER(?v > 10) }")]
+      (is (false? (pred {'?v {:rdf/type :literal :value "9"}}))
+          "9 is not greater than 10, whatever string ordering says"))))
+
+(deftest non-numbers-still-order-lexicographically
+  (let [pred (filter-pred "SELECT ?e WHERE { ?e <urn:kotobase:n> ?v . FILTER(?v > \"m\") }")]
+    (is (true? (pred {'?v {:rdf/type :literal :value "z"}})))
+    (is (false? (pred {'?v {:rdf/type :literal :value "a"}})))))
+
+(deftest a-mixed-comparison-answers-rather-than-throwing
+  (testing "string vs number used to throw on the JVM and silently answer
+            false on cljs — neither is a filter"
+    (let [pred (filter-pred q-gt)]
+      (is (boolean? (pred {'?v {:rdf/type :literal :value "not-a-number"}}))))))
+
+(deftest equality-stays-exact
+  (testing "\"30\" and 30 are different terms; a query asking for one should
+            not match the other. Only the ORDERING comparisons need the rule"
+    (let [pred (filter-pred "SELECT ?e WHERE { ?e <urn:kotobase:n> ?v . FILTER(?v = 30) }")]
+      (is (true? (pred {'?v {:rdf/type :literal :value 30}})))
+      (is (false? (pred {'?v {:rdf/type :literal :value "30"}}))))))

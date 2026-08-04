@@ -222,9 +222,49 @@
 (defn- operand-value [term bindings]
   (if (symbol? term) (:value (get bindings term)) (:value term)))
 
+(defn- as-number
+  "The number `v` denotes, or nil. A STRING that parses counts — a datom
+  plane stringifies on write, so `30` arrives as `\"30\"` and a comparison
+  that only accepted real numbers would answer nothing for every numeric
+  FILTER over real data."
+  [v]
+  (cond
+    (number? v) v
+    (string? v) (when (re-matches #"\s*-?\d+(\.\d+)?\s*" v)
+                  #?(:clj (Double/parseDouble (str/trim v))
+                     :cljs (js/parseFloat v)))
+    :else nil))
+
+(defn- compare-operands
+  "`<`/`>`/`<=`/`>=` NUMERICALLY when both sides denote numbers, and
+  lexicographically otherwise — the same rule `kotobase.server.sparql`'s
+  subset states (\"numeric FILTER comparison applies when both sides parse as
+  numbers; lexicographic otherwise\"), so the two surfaces order the same way.
+
+  Without it, `FILTER(?v > 25)` against a stringifying store compares a
+  string to a number: on the JVM that throws, on cljs it silently answers
+  false for every row. Neither is a filter."
+  [f a b]
+  (let [na (as-number a) nb (as-number b)]
+    (if (and na nb)
+      (f na nb)
+      (f (compare (str a) (str b)) 0))))
+
 (defn- compile-relational [op left right]
-  (let [f (case op "=" = "!=" not= "<" < ">" > "<=" <= ">=" >=)]
-    (fn [b] (boolean (f (operand-value left b) (operand-value right b))))))
+  (let [equality? (contains? #{"=" "!="} op)
+        f (case op "=" = "!=" not= "<" < ">" > "<=" <= ">=" >=)
+        num-f (case op "=" = "!=" not= "<" < ">" > "<=" <= ">=" >=)]
+    (fn [b]
+      (let [a (operand-value left b)
+            c (operand-value right b)]
+        (boolean
+         (if equality?
+           ;; Equality stays exact — `\"30\"` and `30` are different terms and
+           ;; a query asking for one should not match the other. Only the
+           ;; ORDERING comparisons need the numeric rule, which is also where
+           ;; a type mismatch throws rather than merely answering false.
+           (f a c)
+           (compare-operands num-f a c)))))))
 
 (declare parse-unary-expr!)
 
