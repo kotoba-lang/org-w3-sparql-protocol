@@ -20,7 +20,7 @@ jobs:
         with:
           repository: kotoba-lang/sparql
           # Same pin as deps.edn -- keep the two in lockstep.
-          ref: 1029b50cbbbdbc4f76a7c2e7bf86728068ef368b
+          ref: 56c208f15110d36d5df59c7311f7804e0f44c603
           path: .deps/sparql
       - uses: actions/checkout@v4
         with:
