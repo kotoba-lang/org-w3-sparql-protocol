@@ -199,3 +199,51 @@
   (let [pr (pred-of (p "SELECT ?s WHERE { ?s <urn:x> ?o . FILTER(?a = 1 && ?b = 2) }"))]
     (is (true? (pr {'?a (lit 1) '?b (lit 2)})))
     (is (false? (pr {'?a (lit 1) '?b (lit 9)})))))
+
+;; ── aggregates / GROUP BY (kotoba-lang/sparql#4) ────────────────────────────
+
+(deftest count-parses-to-a-group-node
+  (let [{:keys [form output-vars algebra]}
+        (parser/parse "SELECT (COUNT(?e) AS ?c) WHERE { ?e <urn:kotobase:a> ?v }")]
+    (is (= :select form))
+    (is (= '[?c] output-vars) "the aggregate names its own output var")
+    (is (= :project (:sparql/op algebra)))
+    (is (= :group (:sparql/op (:pattern algebra))))
+    (is (= [{:var '?c :fn :count :arg '?e}]
+           (:aggregates (:pattern algebra))))
+    (is (nil? (:by (:pattern algebra))) "no GROUP BY is one group")))
+
+(deftest group-by-carries-its-vars
+  (let [{:keys [output-vars algebra]}
+        (parser/parse "SELECT ?n (COUNT(?e) AS ?c) WHERE { ?e <urn:kotobase:n> ?n } GROUP BY ?n")
+        grp (:pattern algebra)]
+    (is (= '[?n ?c] output-vars) "select-list order, aggregate included")
+    (is (= '[?n] (:by grp)))
+    (is (= [{:var '?c :fn :count :arg '?e}] (:aggregates grp)))))
+
+(deftest every-aggregate-function-parses
+  (doseq [[text f] {"COUNT" :count "SUM" :sum "MIN" :min "MAX" :max "AVG" :avg}]
+    (let [{:keys [algebra]}
+          (parser/parse (str "SELECT (" text "(?v) AS ?x) WHERE { ?e <urn:kotobase:a> ?v }"))]
+      (is (= f (:fn (first (:aggregates (:pattern algebra))))) text))))
+
+(deftest count-star-and-distinct-parse
+  (is (= :* (:arg (first (:aggregates (:pattern (:algebra (parser/parse "SELECT (COUNT(*) AS ?c) WHERE { ?e <urn:kotobase:a> ?v }"))))))))
+  (is (true? (:distinct? (first (:aggregates (:pattern (:algebra (parser/parse "SELECT (COUNT(DISTINCT ?v) AS ?c) WHERE { ?e <urn:kotobase:a> ?v }")))))))))
+
+(deftest grouping-wraps-inside-order-by
+  (testing "ORDER BY may name an aggregate's output var, which does not exist
+            until the group has been computed — so :group must be INSIDE
+            :order-by, not outside it"
+    (let [{:keys [algebra]}
+          (parser/parse (str "SELECT ?n (COUNT(?e) AS ?c) WHERE { ?e <urn:kotobase:n> ?n } "
+                             "GROUP BY ?n ORDER BY ?c"))]
+      (is (= :project (:sparql/op algebra)))
+      (is (= :order-by (:sparql/op (:pattern algebra))))
+      (is (= :group (:sparql/op (:pattern (:pattern algebra))))))))
+
+(deftest group-by-without-an-aggregate-is-refused
+  (testing "loudly, rather than silently ignoring the GROUP BY and answering
+            ungrouped rows"
+    (is (thrown? #?(:clj Exception :cljs js/Error)
+                 (parser/parse "SELECT ?n WHERE { ?e <urn:kotobase:n> ?n } GROUP BY ?n")))))

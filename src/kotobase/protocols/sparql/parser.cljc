@@ -340,14 +340,68 @@
 
 ;; --------------------------------------------------------------- solution
 
-(defn- parse-var-list! [state]
-  ;; SELECT ?a ?b ... | SELECT *
+(def ^:private aggregate-fns
+  {"COUNT" :count "SUM" :sum "MIN" :min "MAX" :max "AVG" :avg})
+
+(defn- parse-aggregate!
+  "`(COUNT(?e) AS ?c)` / `(COUNT(DISTINCT ?e) AS ?c)` / `(COUNT(*) AS ?c)`
+  -> `{:var ?c :fn :count :arg ?e :distinct? bool}`. The opening `(` is
+  already consumed."
+  [state]
+  (let [t (advance! state)
+        f (get aggregate-fns (str/upper-case (str (:text t))))]
+    (when-not f
+      (fail! (str "expected an aggregate ("
+                  (str/join ", " (sort (keys aggregate-fns))) ")") t))
+    (expect-punct! state "(")
+    (let [distinct? (peek-kw? state "DISTINCT")
+          _ (when distinct? (advance! state))
+          arg (if (peek-punct? state "*")
+                (do (advance! state) :*)
+                (let [v (advance! state)]
+                  (when-not (= :var (:type v))
+                    (fail! "expected a variable or * inside the aggregate" v))
+                  (symbol (str "?" (:name v)))))
+          _ (expect-punct! state ")")
+          _ (expect-kw! state "AS")
+          out (advance! state)]
+      (when-not (= :var (:type out))
+        (fail! "expected a variable after AS" out))
+      (expect-punct! state ")")
+      (cond-> {:var (symbol (str "?" (:name out))) :fn f :arg arg}
+        distinct? (assoc :distinct? true)))))
+
+(defn- parse-var-list!
+  "SELECT ?a ?b ... | SELECT * | SELECT ?a (COUNT(?b) AS ?c) ...
+
+  -> `[output-vars aggregates]`. `output-vars` is nil only for `SELECT *`;
+  an aggregate always names its own output var, so a select list containing
+  one is never `*`."
+  [state]
   (if (peek-punct? state "*")
-    (do (advance! state) nil)
-    (loop [vars []]
-      (if (= :var (:type (peek1 state)))
-        (recur (conj vars (symbol (str "?" (:name (advance! state))))))
-        vars))))
+    (do (advance! state) [nil []])
+    (loop [vars [] aggs []]
+      (cond
+        (= :var (:type (peek1 state)))
+        (recur (conj vars (symbol (str "?" (:name (advance! state))))) aggs)
+
+        (peek-punct? state "(")
+        (do (advance! state)
+            (let [agg (parse-aggregate! state)]
+              (recur (conj vars (:var agg)) (conj aggs agg))))
+
+        :else [vars aggs]))))
+
+(defn- parse-group-by! [state]
+  (if (peek-kw? state "GROUP")
+    (do (advance! state) (expect-kw! state "BY")
+        (loop [vars []]
+          (if (= :var (:type (peek1 state)))
+            (recur (conj vars (symbol (str "?" (:name (advance! state))))))
+            (if (seq vars)
+              vars
+              (fail! "expected a variable after GROUP BY" (peek1 state))))))
+    []))
 
 (defn- parse-order-by! [state]
   (if (peek-kw? state "ORDER")
@@ -402,9 +456,21 @@
       (let [_ (advance! state)
             distinct? (peek-kw? state "DISTINCT")
             _ (when distinct? (advance! state))
-            output-vars (parse-var-list! state)
+            [output-vars aggregates] (parse-var-list! state)
             _ (when (peek-kw? state "WHERE") (advance! state))
             pattern (parse-group! state prefixes)
+            group-by (parse-group-by! state)
+            _ (when (and (seq group-by) (empty? aggregates))
+                (fail! "GROUP BY without an aggregate in the select list"
+                       (peek1 state)))
+            ;; Grouping happens BEFORE ordering and projection: ORDER BY may
+            ;; name an aggregate's output var, which does not exist until the
+            ;; group has been computed.
+            pattern (if (seq aggregates)
+                      (cond-> {:sparql/op :group :aggregates aggregates
+                               :pattern pattern}
+                        (seq group-by) (assoc :by group-by))
+                      pattern)
             [order-vars order-desc] (parse-order-by! state)
             [limit offset] (parse-limit-offset! state)
             base (if (seq order-vars)
