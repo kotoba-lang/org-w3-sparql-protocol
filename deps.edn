@@ -10,7 +10,7 @@
  ;; STYLE reference) is deliberately NOT a dependency, see
  ;; kotobase.protocols.sparql.json's ns docstring.
  ;;
- ;; kotobase-query's own deps.edn pulls in kotobase + arrangement, and
+ ;; ayatori's own deps.edn pulls in kotobase + arrangement, and
  ;; arrangement's own deps.edn pulls in prolly-tree/io-ipld (its
  ;; commit!/CID-snapshot machinery, unused by this repo but required at
  ;; namespace-load time) which in turn pull in io-multiformats/org-ietf-cbor
@@ -22,13 +22,14 @@
  ;; datom-source is the IPatternSource contract this repo's `source->quads`
  ;; scans (the pushdown path, ADR-2608039970). Zero deps of its own.
  :deps {io.github.kotoba-lang/datom-source
-        {:git/sha "b42f6e6ff942c7f8a2856f8142ebffc13aa11098"}
+        {:git/sha "19dc98ad5272da6648c27eada8e1ed76cac85d8d"}
         io.github.kotoba-lang/sparql
         {:git/sha "56c208f15110d36d5df59c7311f7804e0f44c603"}
-        io.github.kotoba-lang/kotobase-query
-        {:git/sha "b8bb880d56d242f9a98bd4a9c0375abb4b633bdb"}}
+        io.github.kotoba-lang/ayatori
+        {:git/url "https://github.com/kotoba-lang/ayatori.git"
+         :git/sha "d50ff2529daf428a5e3b8e43d1ca8ec0d6239c29"}}
  ;; First-class runtime is nbb/cljs (repo-wide runtime priority):
- ;;   nbb --classpath "src:test:.deps/sparql/src:.deps/kotobase-query/src:.deps/kotobase/src:.deps/arrangement/src:.deps/prolly-tree/src:.deps/io-ipld/src:.deps/io-multiformats/src:.deps/org-ietf-cbor/src" bin/run_tests.cljs
+ ;;   nbb --classpath "src:test:.deps/datom-source/src:.deps/sparql/src:.deps/kotobase/src:.deps/ayatori/src:.deps/arrangement/src:.deps/prolly-tree/src:.deps/io-ipld/src:.deps/io-multiformats/src:.deps/org-nist-sha2/src:.deps/org-ietf-cbor/src:.deps/dev-protobuf/src:.deps/datalog/src:.deps/io-ipni-specs/src" bin/run_tests.cljs
  ;; The :test alias below is the :clj COMPAT suite only -- not the
  ;; primary execution path.
  :aliases
