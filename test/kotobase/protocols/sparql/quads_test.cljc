@@ -71,7 +71,7 @@
 (deftest datoms-to-quads-survives-a-string-attribute
   ;; The exact shape that was failing in production, driven through the
   ;; function that actually transforms terms.
-  (let [db {:spo {:c/k {"v2" #{1} :ok #{2}}}}
+  (let [db {:eavt {:c/k {"v2" #{1} :ok #{2}}}}
         qs (quads/datoms->quads db (constantly true))]
     (is (= 2 (count qs)))
     (is (= #{"urn:kotobase:v2" "urn:kotobase:ok"}
