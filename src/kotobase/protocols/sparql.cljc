@@ -51,7 +51,7 @@
   - `CONSTRUCT`/`DESCRIBE`/`UPDATE` are NOT implemented (no RDF-graph-out
     or write path in `kotoba-lang/sparql`'s algebra to wrap -- `SELECT`/
     `ASK` only, matching that repo's own `select`/`ask` public API)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kotobase.query.bridge :as bridge]
             [kotobase.protocols.sparql.json :as json]
             [kotobase.protocols.sparql.ntriples :as nt]
@@ -63,7 +63,7 @@
 ;; ------------------------------------------------------------- ring bits
 
 (defn- query-param [req k] (get (:query req) k))
-(defn- header [req k] (get (:headers req) (str/lower-case k)))
+(defn- header [req k] (get (:headers req) (str/lower k)))
 
 (defn- response
   ([status headers body] {:status status :headers headers :body body})
@@ -131,7 +131,7 @@
   [req]
   (case (:method req)
     :get (query-param req "query")
-    :post (let [ctype (str/lower-case (or (header req "content-type") ""))]
+    :post (let [ctype (str/lower (or (header req "content-type") ""))]
             (cond
               (str/starts-with? ctype "application/sparql-query") (:body req)
               (str/starts-with? ctype "application/x-www-form-urlencoded")
@@ -152,7 +152,7 @@
   same as the JSON path: a client that expressed no preference gets the one
   format there is rather than a 406 telling it so."
   [accept]
-  (let [a (str/lower-case (or accept ""))]
+  (let [a (str/lower (or accept ""))]
     (or (str/blank? a)
         (str/includes? a "*/*")
         (str/includes? a nt/content-type)

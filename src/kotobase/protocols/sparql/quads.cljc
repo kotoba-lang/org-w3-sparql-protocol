@@ -39,7 +39,7 @@
   the other. `visible?` is `(fn [{:keys [s p o]}]) -> bool`, applied
   triple-by-triple BEFORE the term transform. Passing `(constantly true)` is
   a caller's explicit choice, never this namespace's default."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [datom.source :as src]
             [kotobase.query.bridge :as bridge]))
 
