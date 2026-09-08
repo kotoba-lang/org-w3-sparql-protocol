@@ -56,7 +56,7 @@
     Given this repo's own quad transform never emits an object-position
     IRI (see `quads/->term`), this does not arise for BGP-produced
     bindings in practice, but is stated here rather than left implicit."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kotobase.protocols.sparql.quads :as quads]))
 
 ;; ------------------------------------------------------------- tokenizer
@@ -157,7 +157,7 @@
     (swap! state update :toks subvec 1)
     (first toks)))
 (defn- kw-tok? [tok kw]
-  (and tok (= :ident (:type tok)) (= kw (str/upper-case (:text tok)))))
+  (and tok (= :ident (:type tok)) (= kw (str/upper (:text tok)))))
 (defn- punct-tok? [tok ch] (and tok (= :punct (:type tok)) (= ch (:text tok))))
 (defn- op-tok? [tok op] (and tok (= :op (:type tok)) (= op (:text tok))))
 (defn- peek-kw? [state kw] (kw-tok? (peek1 state) kw))
@@ -207,7 +207,7 @@
       :pname (quads/iri (resolve-pname prefixes t))
       :string (quads/->literal (:value t))
       :number (quads/->literal (:value t))
-      :ident (let [u (str/upper-case (:text t))]
+      :ident (let [u (str/upper (:text t))]
                (cond
                  (= u "TRUE") (quads/->literal true)
                  (= u "FALSE") (quads/->literal false)
@@ -389,7 +389,7 @@
   already consumed."
   [state]
   (let [t (advance! state)
-        f (get aggregate-fns (str/upper-case (str (:text t))))]
+        f (get aggregate-fns (str/upper (str (:text t))))]
     (when-not f
       (fail! (str "expected an aggregate ("
                   (str/join ", " (sort (keys aggregate-fns))) ")") t))

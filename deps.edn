@@ -21,7 +21,12 @@
  ;; Develop/test section for the exact command.
  ;; datom-source is the IPatternSource contract this repo's `source->quads`
  ;; scans (the pushdown path, ADR-2608039970). Zero deps of its own.
- :deps {io.github.kotoba-lang/datom-source
+ :deps {
+        ;; kotoba.lang.text, not clojure.string. Pinned as an explicit floor:
+        ;; tools.deps takes the NEWEST sha it is shown, so without a floor here
+        ;; this repo silently rides whatever a sibling happens to name.
+        io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+       io.github.kotoba-lang/datom-source
         {:git/sha "19dc98ad5272da6648c27eada8e1ed76cac85d8d"}
         io.github.kotoba-lang/sparql
         {:git/sha "56c208f15110d36d5df59c7311f7804e0f44c603"}

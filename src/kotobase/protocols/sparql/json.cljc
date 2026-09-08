@@ -15,7 +15,7 @@
   only; nothing in this protocol's request path is JSON to PARSE -- GET
   query params and POST bodies are SPARQL query text or form-urlencoded,
   never JSON)."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn- escape-str [s]
   (str/replace s #"[\"\\\u0000-\u001f]"

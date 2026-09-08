@@ -12,7 +12,7 @@
   Turtle would be smaller and RDF/XML more traditional. Neither is implemented,
   and this namespace does not pretend to negotiate: the handler answers 406 for
   anything else rather than sending N-Triples under another content type."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def content-type "application/n-triples")
 
