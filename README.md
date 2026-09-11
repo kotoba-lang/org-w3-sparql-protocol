@@ -187,7 +187,7 @@ of scope, matching `kotoba-lang/sparql`'s own no-named-graphs boundary).
   `org-ietf-cbor` — see `kotobase-query`'s own README for why. `deps.edn`'s
   two direct git deps resolve that whole chain automatically for the JVM
   `:test` alias via `tools.deps`; the nbb primary test path has no
-  dependency resolver, so `bin/run_tests.cljs`/CI clone every transitive dep
+  dependency resolver, so `bin/run_tests.cljk`/CI clone every transitive dep
   by hand.
 - npm `@noble/hashes` — transitive JS-runtime dep of `io-multiformats`,
   same as `kotobase-query`'s own `package.json`.
@@ -206,7 +206,7 @@ git clone https://github.com/kotoba-lang/io-ipld .deps/io-ipld
 git clone https://github.com/kotoba-lang/io-multiformats .deps/io-multiformats
 git clone https://github.com/kotoba-lang/org-ietf-cbor .deps/org-ietf-cbor
 npm install
-nbb --classpath "src:test:.deps/sparql/src:.deps/kotobase-query/src:.deps/kotobase/src:.deps/arrangement/src:.deps/prolly-tree/src:.deps/io-ipld/src:.deps/io-multiformats/src:.deps/org-ietf-cbor/src" bin/run_tests.cljs
+nbb --classpath "src:test:.deps/sparql/src:.deps/kotobase-query/src:.deps/kotobase/src:.deps/arrangement/src:.deps/prolly-tree/src:.deps/io-ipld/src:.deps/io-multiformats/src:.deps/org-ietf-cbor/src" bin/run_tests.cljk
 ```
 
 Each `.deps/<name>` should be checked out at the SHA pinned in `deps.edn`
