@@ -206,7 +206,7 @@ git clone https://github.com/kotoba-lang/io-ipld .deps/io-ipld
 git clone https://github.com/kotoba-lang/io-multiformats .deps/io-multiformats
 git clone https://github.com/kotoba-lang/org-ietf-cbor .deps/org-ietf-cbor
 npm install
-nbb --classpath "src:test:.deps/sparql/src:.deps/kotobase-query/src:.deps/kotobase/src:.deps/arrangement/src:.deps/prolly-tree/src:.deps/io-ipld/src:.deps/io-multiformats/src:.deps/org-ietf-cbor/src" bin/run_tests.cljk
+kbb --backend sci --classpath "src:test:.deps/sparql/src:.deps/kotobase-query/src:.deps/kotobase/src:.deps/arrangement/src:.deps/prolly-tree/src:.deps/io-ipld/src:.deps/io-multiformats/src:.deps/org-ietf-cbor/src" bin/run_tests.cljk
 ```
 
 Each `.deps/<name>` should be checked out at the SHA pinned in `deps.edn`
@@ -216,7 +216,7 @@ of them, see `.github/workflows/ci.yml`.
 The `:test` alias in `deps.edn` is the JVM **compat** suite only (`clojure
 -M:test`, via `tools.deps` transitive git-dep resolution — no manual
 `.deps/` cloning needed for this path) — not the primary execution path.
-`clojure -M:lint` runs `clj-kondo`.
+`kbb -M:lint` runs `clj-kondo`.
 
 ## License
 
