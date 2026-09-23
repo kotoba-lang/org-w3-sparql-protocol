@@ -1,5 +1,5 @@
 (ns kotobase.protocols.sparql.results-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [kotobase.protocols.sparql.quads :as quads]
             [kotobase.protocols.sparql.results :as results]))
 

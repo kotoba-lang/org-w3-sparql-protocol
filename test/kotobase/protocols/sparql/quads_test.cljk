@@ -1,5 +1,5 @@
 (ns kotobase.protocols.sparql.quads-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotobase.local :as local]
             [kotobase.store :as st]
             [kotobase.query.bridge :as bridge]
