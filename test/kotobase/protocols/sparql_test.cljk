@@ -1,6 +1,6 @@
 (ns kotobase.protocols.sparql-test
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is testing]]
+            [kotoba.test :refer [deftest is testing]]
             [kotobase.local :as local]
             [kotobase.store :as st]
             [kotobase.protocols.sparql :as h]))
